@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+.pytest_cache/
+data/
+.DS_Store
+.claude/settings.local.json
+.env
+# Tài liệu đề bài, không đưa lên repo công khai
+*.pdf

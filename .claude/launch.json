@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "backend-be2",
+      "runtimeExecutable": "env",
+      "runtimeArgs": ["DEV_AUTH=1", "BE_DB_PATH=data/dev.sqlite3", ".venv/bin/uvicorn", "backend.main:create_app", "--factory", "--port", "8765"],
+      "port": 8765
+    }
+  ]
+}
