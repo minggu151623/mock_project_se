@@ -58,7 +58,10 @@ DEV_AUTH=1 .venv/bin/uvicorn backend.main:create_app --factory --reload --port 8
 
 - Tài liệu API: http://localhost:8765/docs
 - Khi chạy với `DEV_AUTH=1`, gọi API bằng header `X-Dev-User: dsp1` và `X-Dev-Roles: DSP`. Không bật biến này trên môi trường thật.
-- Chưa có migration. Khi `backend/schema.sql` đổi, xóa thư mục `data/` rồi chạy lại `seed_dev`.
+- Schema ban đầu ở `backend/schema.sql` được áp dụng như migration phiên bản 1.
+  Các thay đổi tiếp theo dùng file tuần tự `backend/migrations/NNNN_*.sql`;
+  không sửa migration đã dùng ở máy khác. `backend/db.py:init_db()` ghi lịch sử
+  vào `schema_migrations`. Quy tắc chi tiết ở `backend/migrations/README.md`.
 
 ## 4. Cấu trúc backend hiện có
 

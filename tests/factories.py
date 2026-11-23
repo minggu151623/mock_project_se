@@ -12,6 +12,7 @@ SAL = {"X-Dev-User": "sal1", "X-Dev-Roles": "SAL"}
 ADM = {"X-Dev-User": "adm1", "X-Dev-Roles": "ADM"}
 WHS = {"X-Dev-User": "whs1", "X-Dev-Roles": "WHS"}
 MGR = {"X-Dev-User": "mgr1", "X-Dev-Roles": "MGR"}
+FIN = {"X-Dev-User": "fin1", "X-Dev-Roles": "FIN"}
 PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 64
 PDF = b"%PDF-1.4\n%test\n"
 ACTOR = "dsp1"

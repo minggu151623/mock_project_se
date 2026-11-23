@@ -11,7 +11,9 @@ def connect(path: str) -> sqlite3.Connection:
     """Mở một kết nối. Mỗi request/luồng dùng kết nối riêng."""
     if path != ":memory:":
         Path(path).parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(path, isolation_level=None, timeout=10, check_same_thread=False)
+    conn = sqlite3.connect(
+        path, isolation_level=None, timeout=10, check_same_thread=False
+    )
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA busy_timeout = 10000")
@@ -21,7 +23,43 @@ def connect(path: str) -> sqlite3.Connection:
 
 
 def init_db(conn: sqlite3.Connection) -> None:
-    conn.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
+    """Apply the idempotent baseline schema and later versioned SQL migrations.
+
+    Existing development databases are upgraded safely: the baseline uses
+    ``CREATE ... IF NOT EXISTS`` statements, so it fills missing objects without
+    deleting existing data. Future changes belong in migrations/0002_*.sql and
+    later files; each migration is recorded only after its SQL succeeds.
+    """
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS schema_migrations ("
+        "version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL)"
+    )
+    applied = {row[0] for row in conn.execute("SELECT version FROM schema_migrations")}
+
+    if 1 not in applied:
+        baseline = SCHEMA_PATH.read_text(encoding="utf-8")
+        conn.executescript(
+            "BEGIN IMMEDIATE;\n"
+            + baseline
+            + "\nINSERT INTO schema_migrations(version,name,applied_at) "
+            "VALUES(1,'initial_schema',strftime('%Y-%m-%dT%H:%M:%fZ','now'));\n"
+            "COMMIT;"
+        )
+
+    migrations_dir = Path(__file__).with_name("migrations")
+    for migration_path in sorted(migrations_dir.glob("[0-9][0-9][0-9][0-9]_*.sql")):
+        version = int(migration_path.name.split("_", maxsplit=1)[0])
+        if version in applied:
+            continue
+        migration_sql = migration_path.read_text(encoding="utf-8")
+        conn.executescript(
+            "BEGIN IMMEDIATE;\n"
+            + migration_sql
+            + f"\nINSERT INTO schema_migrations(version,name,applied_at) "
+            f"VALUES({version},'{migration_path.stem}',"
+            "strftime('%Y-%m-%dT%H:%M:%fZ','now'));\nCOMMIT;"
+        )
+        applied.add(version)
 
 
 @contextmanager

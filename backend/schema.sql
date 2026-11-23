@@ -207,6 +207,189 @@ CREATE TABLE IF NOT EXISTS idempotency_keys (
     PRIMARY KEY (actor, key)
 );
 
+-- ================= Kinh doanh và tài chính (BE1) =================
+CREATE TABLE IF NOT EXISTS customers (
+    id INTEGER PRIMARY KEY,
+    code TEXT NOT NULL UNIQUE,
+    customer_type TEXT NOT NULL CHECK(customer_type IN ('INDIVIDUAL','BUSINESS')),
+    name TEXT NOT NULL CHECK(length(name) BETWEEN 1 AND 200),
+    contact_name TEXT NOT NULL CHECK(length(contact_name) BETWEEN 1 AND 200),
+    phone TEXT NOT NULL,
+    email TEXT,
+    address TEXT,
+    status TEXT NOT NULL CHECK(status IN ('ACTIVE','INACTIVE')),
+    version INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL, created_by TEXT NOT NULL,
+    updated_at TEXT NOT NULL, updated_by TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_customers_phone ON customers(phone);
+CREATE INDEX IF NOT EXISTS ix_customers_email ON customers(email);
+
+CREATE TABLE IF NOT EXISTS service_requests (
+    id INTEGER PRIMARY KEY,
+    code TEXT NOT NULL UNIQUE,
+    service_type TEXT NOT NULL CHECK(service_type IN ('TRANSPORT','RENTAL','WAREHOUSE')),
+    source TEXT NOT NULL CHECK(source IN ('WEBSITE','INTERNAL')),
+    customer_code TEXT REFERENCES customers(code),
+    initial_contact_json TEXT NOT NULL,
+    service_data_json TEXT NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('NEW','CLARIFYING','QUOTING','CONFIRMED','CLOSED_LOST')),
+    assigned_to TEXT,
+    public_token_hash TEXT,
+    closed_reason TEXT,
+    version INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL, created_by TEXT NOT NULL,
+    updated_at TEXT NOT NULL, updated_by TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_request_status ON service_requests(status,created_at);
+
+CREATE TABLE IF NOT EXISTS request_events (
+    id INTEGER PRIMARY KEY,
+    request_code TEXT NOT NULL REFERENCES service_requests(code),
+    event_type TEXT NOT NULL, content TEXT NOT NULL,
+    actual_at TEXT NOT NULL, recorded_at TEXT NOT NULL, recorded_by TEXT NOT NULL
+);
+CREATE TRIGGER IF NOT EXISTS trg_request_events_no_update BEFORE UPDATE ON request_events BEGIN SELECT RAISE(ABORT,'APPEND_ONLY'); END;
+CREATE TRIGGER IF NOT EXISTS trg_request_events_no_delete BEFORE DELETE ON request_events BEGIN SELECT RAISE(ABORT,'APPEND_ONLY'); END;
+
+CREATE TABLE IF NOT EXISTS quotes (
+    id INTEGER PRIMARY KEY,
+    code TEXT NOT NULL UNIQUE,
+    request_code TEXT NOT NULL REFERENCES service_requests(code),
+    version_no INTEGER NOT NULL CHECK(version_no > 0),
+    previous_quote_code TEXT REFERENCES quotes(code),
+    valid_until TEXT NOT NULL,
+    service_data_json TEXT NOT NULL,
+    terms TEXT NOT NULL DEFAULT '',
+    total_vnd INTEGER NOT NULL DEFAULT 0 CHECK(total_vnd >= 0),
+    status TEXT NOT NULL CHECK(status IN ('DRAFT','SENT','ACCEPTED','REJECTED','SUPERSEDED')),
+    response_json TEXT,
+    row_version INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL, created_by TEXT NOT NULL,
+    updated_at TEXT NOT NULL, updated_by TEXT NOT NULL,
+    UNIQUE(request_code,version_no)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_quote_pending_request ON quotes(request_code) WHERE status='SENT';
+CREATE TRIGGER IF NOT EXISTS trg_quote_state_change
+BEFORE UPDATE OF status ON quotes
+WHEN NOT (
+    (OLD.status='DRAFT' AND NEW.status='SENT') OR
+    (OLD.status='SENT' AND NEW.status IN ('ACCEPTED','REJECTED','SUPERSEDED'))
+)
+BEGIN
+    SELECT RAISE(ABORT,'INVALID_QUOTE_TRANSITION');
+END;
+CREATE TRIGGER IF NOT EXISTS trg_quote_final_update
+BEFORE UPDATE ON quotes
+WHEN OLD.status<>'DRAFT' AND (
+    NEW.request_code IS NOT OLD.request_code OR
+    NEW.version_no IS NOT OLD.version_no OR
+    NEW.valid_until IS NOT OLD.valid_until OR
+    NEW.service_data_json IS NOT OLD.service_data_json OR
+    NEW.terms IS NOT OLD.terms OR
+    NEW.total_vnd IS NOT OLD.total_vnd
+)
+BEGIN
+    SELECT RAISE(ABORT,'QUOTE_IMMUTABLE');
+END;
+CREATE TABLE IF NOT EXISTS quote_lines (
+    id INTEGER PRIMARY KEY,
+    quote_code TEXT NOT NULL REFERENCES quotes(code),
+    description TEXT NOT NULL,
+    quantity INTEGER NOT NULL CHECK(quantity > 0),
+    unit_price_vnd INTEGER NOT NULL CHECK(unit_price_vnd >= 0),
+    line_total_vnd INTEGER NOT NULL CHECK(line_total_vnd >= 0)
+);
+CREATE TRIGGER IF NOT EXISTS trg_quote_line_insert_draft
+BEFORE INSERT ON quote_lines
+WHEN (SELECT status FROM quotes WHERE code=NEW.quote_code)<>'DRAFT'
+BEGIN
+    SELECT RAISE(ABORT,'QUOTE_IMMUTABLE');
+END;
+CREATE TRIGGER IF NOT EXISTS trg_quote_line_update_draft
+BEFORE UPDATE ON quote_lines
+WHEN (SELECT status FROM quotes WHERE code=OLD.quote_code)<>'DRAFT'
+BEGIN
+    SELECT RAISE(ABORT,'QUOTE_IMMUTABLE');
+END;
+CREATE TRIGGER IF NOT EXISTS trg_quote_line_delete_draft
+BEFORE DELETE ON quote_lines
+WHEN (SELECT status FROM quotes WHERE code=OLD.quote_code)<>'DRAFT'
+BEGIN
+    SELECT RAISE(ABORT,'QUOTE_IMMUTABLE');
+END;
+
+CREATE TABLE IF NOT EXISTS service_orders (
+    id INTEGER PRIMARY KEY,
+    code TEXT NOT NULL UNIQUE,
+    request_code TEXT NOT NULL UNIQUE REFERENCES service_requests(code),
+    quote_code TEXT NOT NULL UNIQUE REFERENCES quotes(code),
+    customer_code TEXT NOT NULL REFERENCES customers(code),
+    service_type TEXT NOT NULL CHECK(service_type IN ('TRANSPORT','RENTAL','WAREHOUSE')),
+    service_snapshot_json TEXT NOT NULL,
+    price_snapshot_vnd INTEGER NOT NULL CHECK(price_snapshot_vnd >= 0),
+    operational_code TEXT NOT NULL UNIQUE,
+    status TEXT NOT NULL CHECK(status IN ('CONFIRMED','IN_PROGRESS','COMPLETED','CANCELLED')),
+    payment_due_date TEXT NOT NULL,
+    version INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL, created_by TEXT NOT NULL,
+    updated_at TEXT NOT NULL, updated_by TEXT NOT NULL,
+    cancelled_at TEXT, cancelled_by TEXT, cancel_reason TEXT
+);
+CREATE INDEX IF NOT EXISTS ix_orders_customer ON service_orders(customer_code,created_at);
+CREATE INDEX IF NOT EXISTS ix_orders_due ON service_orders(payment_due_date,status);
+
+CREATE TABLE IF NOT EXISTS charges (
+    id INTEGER PRIMARY KEY,
+    code TEXT NOT NULL UNIQUE,
+    order_code TEXT NOT NULL REFERENCES service_orders(code),
+    amount_vnd INTEGER NOT NULL CHECK(amount_vnd > 0),
+    reason TEXT NOT NULL,
+    evidence_json TEXT NOT NULL DEFAULT '[]',
+    status TEXT NOT NULL CHECK(status IN ('PENDING','APPROVED','REJECTED')),
+    decision_note TEXT, decided_by TEXT, decided_at TEXT,
+    created_at TEXT NOT NULL, created_by TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_charges_order_status ON charges(order_code,status);
+CREATE TRIGGER IF NOT EXISTS trg_charge_final_update
+BEFORE UPDATE ON charges
+WHEN OLD.status<>'PENDING' OR NEW.status NOT IN ('APPROVED','REJECTED')
+BEGIN
+    SELECT RAISE(ABORT,'CHARGE_IMMUTABLE');
+END;
+CREATE TRIGGER IF NOT EXISTS trg_charge_no_delete
+BEFORE DELETE ON charges
+BEGIN
+    SELECT RAISE(ABORT,'CHARGE_IMMUTABLE');
+END;
+
+CREATE TABLE IF NOT EXISTS payments (
+    id INTEGER PRIMARY KEY,
+    code TEXT NOT NULL UNIQUE,
+    order_code TEXT NOT NULL REFERENCES service_orders(code),
+    amount_vnd INTEGER NOT NULL CHECK(amount_vnd > 0),
+    occurred_at TEXT NOT NULL,
+    method TEXT NOT NULL CHECK(method IN ('CASH','BANK_TRANSFER')),
+    reference TEXT, note TEXT,
+    reversal_of TEXT UNIQUE REFERENCES payments(code),
+    reason TEXT,
+    status TEXT NOT NULL CHECK(status IN ('POSTED','REVERSED')),
+    created_at TEXT NOT NULL, created_by TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_payment_reference ON payments(order_code,reference)
+ WHERE reference IS NOT NULL AND reversal_of IS NULL;
+CREATE INDEX IF NOT EXISTS ix_payments_order ON payments(order_code,created_at);
+CREATE TRIGGER IF NOT EXISTS trg_payment_immutable BEFORE UPDATE ON payments
+WHEN NOT (OLD.status='POSTED' AND OLD.reversal_of IS NULL AND NEW.status='REVERSED'
+    AND NEW.code IS OLD.code AND NEW.order_code IS OLD.order_code
+    AND NEW.amount_vnd IS OLD.amount_vnd AND NEW.occurred_at IS OLD.occurred_at
+    AND NEW.method IS OLD.method AND NEW.reference IS OLD.reference
+    AND NEW.note IS OLD.note AND NEW.reversal_of IS OLD.reversal_of
+    AND NEW.reason IS OLD.reason AND NEW.created_at IS OLD.created_at
+    AND NEW.created_by IS OLD.created_by)
+BEGIN SELECT RAISE(ABORT,'PAYMENT_IMMUTABLE'); END;
+CREATE TRIGGER IF NOT EXISTS trg_payment_no_delete BEFORE DELETE ON payments BEGIN SELECT RAISE(ABORT,'PAYMENT_IMMUTABLE'); END;
+
 -- ================= Thực hiện chuyến (TRN-03/04/05) =================
 
 -- Mỗi mốc chỉ ghi một lần; gửi lại không nhân đôi mốc (TRN-04).

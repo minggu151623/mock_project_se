@@ -13,7 +13,7 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
-from . import api, api_operations, api_warehouse
+from . import api, api_operations, api_warehouse, api_sales, sales
 from .auth import PrincipalProvider, deny_all_provider, dev_header_provider
 from .db import connect, init_db
 from .errors import DomainError
@@ -22,9 +22,13 @@ from .timeutil import system_now
 log = logging.getLogger("backend")
 
 
-def _error(status: int, code: str, message: str, details: dict | None = None) -> JSONResponse:
-    return JSONResponse(status_code=status,
-                        content={"error": {"code": code, "message": message, "details": details or {}}})
+def _error(
+    status: int, code: str, message: str, details: dict | None = None
+) -> JSONResponse:
+    return JSONResponse(
+        status_code=status,
+        content={"error": {"code": code, "message": message, "details": details or {}}},
+    )
 
 
 def create_app(
@@ -34,6 +38,7 @@ def create_app(
     principal_provider: PrincipalProvider | None = None,
     clock: Callable[[], datetime] | None = None,
 ) -> FastAPI:
+    sales.bind_integrations()
     db_path = db_path or os.environ.get("BE_DB_PATH", "data/dev.sqlite3")
     conn = connect(db_path)
     try:
@@ -41,11 +46,15 @@ def create_app(
     finally:
         conn.close()
 
-    app = FastAPI(title="BE2 – Vận hành: đội xe, vận tải, thuê xe, kho", version="0.2.0")
+    app = FastAPI(title="Mock Project – Backend", version="0.3.0")
     app.state.db_path = db_path
     app.state.files_dir = files_dir or os.environ.get("BE_FILES_DIR", "data/files")
     if principal_provider is None:
-        principal_provider = dev_header_provider if os.environ.get("DEV_AUTH") == "1" else deny_all_provider
+        principal_provider = (
+            dev_header_provider
+            if os.environ.get("DEV_AUTH") == "1"
+            else deny_all_provider
+        )
     app.state.principal_provider = principal_provider
     app.state.clock = clock or system_now
 
@@ -63,10 +72,16 @@ def create_app(
 
     @app.exception_handler(RequestValidationError)
     async def validation_error(request: Request, exc: RequestValidationError):
-        fields = [{"field": ".".join(str(p) for p in e["loc"][1:]), "message": e["msg"]}
-                  for e in exc.errors()]
-        return _error(422, "VALIDATION_ERROR", "Dữ liệu không hợp lệ. Kiểm tra các trường được nêu.",
-                      {"fields": fields})
+        fields = [
+            {"field": ".".join(str(p) for p in e["loc"][1:]), "message": e["msg"]}
+            for e in exc.errors()
+        ]
+        return _error(
+            422,
+            "VALIDATION_ERROR",
+            "Dữ liệu không hợp lệ. Kiểm tra các trường được nêu.",
+            {"fields": fields},
+        )
 
     @app.exception_handler(Exception)
     async def unexpected_error(request: Request, exc: Exception):
@@ -78,4 +93,5 @@ def create_app(
     app.include_router(api.router, prefix="/api")
     app.include_router(api_operations.router, prefix="/api")
     app.include_router(api_warehouse.router, prefix="/api")
+    app.include_router(api_sales.router, prefix="/api")
     return app
