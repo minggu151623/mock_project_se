@@ -6,7 +6,7 @@ import math
 import secrets
 from datetime import date, datetime, time
 
-from . import assignments, attachments, warehouse
+from . import assignments, attachments, auth, warehouse
 from .audit import write_audit
 from .db import next_code, require_tx
 from .errors import Conflict, NotFound, ValidationFailed
@@ -546,6 +546,8 @@ def update_request(conn, code, *, version, actor, now, **fields):
     assigned_to = fields.get("assigned_to") or r["assigned_to"]
     if assigned_to is not None:
         assigned_to = clean_text(assigned_to, "assigned_to", max_len=100)
+        if fields.get("assigned_to") is not None:
+            auth.ensure_active_role(conn, assigned_to, "SAL", now=now)
     conn.execute(
         "UPDATE service_requests SET status=?,customer_code=?,assigned_to=COALESCE(?,assigned_to),closed_reason=?,version=version+1,updated_at=?,updated_by=? WHERE code=?",
         (

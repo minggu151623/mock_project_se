@@ -661,3 +661,187 @@ WHEN (NEW.item_code IS NOT OLD.item_code OR NEW.unit_code IS NOT OLD.unit_code)
 BEGIN
     SELECT RAISE(ABORT, 'LOT_LINE_IN_USE');
 END;
+
+-- ================= Khách, Quản trị và Kiểm thử (BE3 - Vũ) =================
+
+-- Tài khoản, vai trò và phiên đăng nhập (ADM-01, ADM-02).
+CREATE TABLE IF NOT EXISTS users (
+    id                   INTEGER PRIMARY KEY,
+    username             TEXT NOT NULL UNIQUE,
+    full_name            TEXT NOT NULL,
+    email                TEXT,
+    phone                TEXT,
+    password_hash        TEXT NOT NULL,
+    status               TEXT NOT NULL CHECK (status IN ('ACTIVE', 'LOCKED')),
+    must_change_password INTEGER NOT NULL DEFAULT 1 CHECK (must_change_password IN (0, 1)),
+    failed_login_count   INTEGER NOT NULL DEFAULT 0 CHECK (failed_login_count >= 0),
+    first_failed_at      TEXT,
+    locked_until         TEXT,
+    lock_reason          TEXT,
+    version              INTEGER NOT NULL DEFAULT 1,
+    created_at           TEXT NOT NULL,
+    created_by           TEXT NOT NULL,
+    updated_at           TEXT NOT NULL,
+    updated_by           TEXT NOT NULL
+);
+
+CREATE TRIGGER IF NOT EXISTS trg_users_no_delete
+BEFORE DELETE ON users
+BEGIN
+    SELECT RAISE(ABORT, 'USER_NO_DELETE');
+END;
+
+CREATE TABLE IF NOT EXISTS user_roles (
+    user_id     INTEGER NOT NULL REFERENCES users(id),
+    role_code   TEXT NOT NULL CHECK (role_code IN ('SAL', 'DSP', 'WHS', 'FIN', 'MGR', 'ADM')),
+    assigned_at TEXT NOT NULL,
+    assigned_by TEXT NOT NULL,
+    PRIMARY KEY (user_id, role_code)
+);
+CREATE INDEX IF NOT EXISTS ix_user_roles_role ON user_roles(role_code, user_id);
+
+CREATE TABLE IF NOT EXISTS user_sessions (
+    id            INTEGER PRIMARY KEY,
+    token_hash    TEXT NOT NULL UNIQUE,
+    user_id       INTEGER NOT NULL REFERENCES users(id),
+    username      TEXT NOT NULL,
+    created_at    TEXT NOT NULL,
+    last_seen_at  TEXT NOT NULL,
+    expires_at    TEXT NOT NULL,
+    revoked_at    TEXT,
+    revoke_reason TEXT
+);
+CREATE INDEX IF NOT EXISTS ix_user_sessions_user ON user_sessions(user_id, revoked_at);
+
+-- Danh mục dùng chung (ADM-03): chỉ ngừng dùng, không xóa vật lý.
+CREATE TABLE IF NOT EXISTS catalog_vehicle_types (
+    id                  INTEGER PRIMARY KEY,
+    code                TEXT NOT NULL UNIQUE,
+    name                TEXT NOT NULL,
+    default_capacity_kg INTEGER NOT NULL CHECK (default_capacity_kg > 0),
+    description         TEXT NOT NULL DEFAULT '',
+    status              TEXT NOT NULL CHECK (status IN ('ACTIVE', 'INACTIVE')),
+    version             INTEGER NOT NULL DEFAULT 1,
+    created_at          TEXT NOT NULL,
+    created_by          TEXT NOT NULL,
+    updated_at          TEXT NOT NULL,
+    updated_by          TEXT NOT NULL
+);
+
+CREATE TRIGGER IF NOT EXISTS trg_catalog_vtype_no_delete
+BEFORE DELETE ON catalog_vehicle_types
+BEGIN
+    SELECT RAISE(ABORT, 'CATALOG_NO_DELETE');
+END;
+
+CREATE TABLE IF NOT EXISTS catalog_units (
+    id          INTEGER PRIMARY KEY,
+    code        TEXT NOT NULL UNIQUE,
+    name        TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    status      TEXT NOT NULL CHECK (status IN ('ACTIVE', 'INACTIVE')),
+    version     INTEGER NOT NULL DEFAULT 1,
+    created_at  TEXT NOT NULL,
+    created_by  TEXT NOT NULL,
+    updated_at  TEXT NOT NULL,
+    updated_by  TEXT NOT NULL
+);
+
+CREATE TRIGGER IF NOT EXISTS trg_catalog_unit_no_delete
+BEFORE DELETE ON catalog_units
+BEGIN
+    SELECT RAISE(ABORT, 'CATALOG_NO_DELETE');
+END;
+
+CREATE TABLE IF NOT EXISTS catalog_services (
+    id                INTEGER PRIMARY KEY,
+    code              TEXT NOT NULL UNIQUE CHECK (code IN ('TRANSPORT', 'RENTAL', 'WAREHOUSE')),
+    name              TEXT NOT NULL,
+    description       TEXT NOT NULL DEFAULT '',
+    warehouse_address TEXT NOT NULL DEFAULT '',
+    status            TEXT NOT NULL CHECK (status IN ('ACTIVE', 'INACTIVE')),
+    version           INTEGER NOT NULL DEFAULT 1,
+    created_at        TEXT NOT NULL,
+    created_by        TEXT NOT NULL,
+    updated_at        TEXT NOT NULL,
+    updated_by        TEXT NOT NULL
+);
+
+CREATE TRIGGER IF NOT EXISTS trg_catalog_service_no_delete
+BEFORE DELETE ON catalog_services
+BEGIN
+    SELECT RAISE(ABORT, 'CATALOG_NO_DELETE');
+END;
+
+-- Website công khai & CMS (PUB-01→05).
+CREATE TABLE IF NOT EXISTS public_contents (
+    id           INTEGER PRIMARY KEY,
+    code         TEXT NOT NULL UNIQUE,
+    slug         TEXT NOT NULL UNIQUE,
+    content_type TEXT NOT NULL CHECK (content_type IN ('COMPANY', 'SERVICE', 'FAQ', 'CONTACT')),
+    service_type TEXT CHECK (service_type IS NULL OR service_type IN ('TRANSPORT', 'RENTAL', 'WAREHOUSE')),
+    title        TEXT NOT NULL,
+    summary      TEXT NOT NULL DEFAULT '',
+    body_html    TEXT NOT NULL,
+    meta_json    TEXT NOT NULL DEFAULT '{}',
+    sort_order   INTEGER NOT NULL DEFAULT 0,
+    status       TEXT NOT NULL CHECK (status IN ('DRAFT', 'PUBLISHED', 'HIDDEN')),
+    published_at TEXT,
+    published_by TEXT,
+    version      INTEGER NOT NULL DEFAULT 1,
+    created_at   TEXT NOT NULL,
+    created_by   TEXT NOT NULL,
+    updated_at   TEXT NOT NULL,
+    updated_by   TEXT NOT NULL,
+    CHECK ((content_type = 'SERVICE' AND service_type IS NOT NULL)
+        OR (content_type <> 'SERVICE' AND service_type IS NULL))
+);
+CREATE INDEX IF NOT EXISTS ix_public_contents_status ON public_contents(status, content_type, sort_order);
+
+CREATE TRIGGER IF NOT EXISTS trg_public_contents_no_delete
+BEFORE DELETE ON public_contents
+BEGIN
+    SELECT RAISE(ABORT, 'CONTENT_NO_DELETE');
+END;
+
+CREATE TABLE IF NOT EXISTS public_content_revisions (
+    id           INTEGER PRIMARY KEY,
+    content_code TEXT NOT NULL REFERENCES public_contents(code),
+    version_no   INTEGER NOT NULL CHECK (version_no > 0),
+    title        TEXT NOT NULL,
+    summary      TEXT NOT NULL,
+    body_html    TEXT NOT NULL,
+    status       TEXT NOT NULL,
+    changed_at   TEXT NOT NULL,
+    changed_by   TEXT NOT NULL,
+    reason       TEXT
+);
+CREATE INDEX IF NOT EXISTS ix_content_revisions_code ON public_content_revisions(content_code, version_no DESC);
+
+CREATE TRIGGER IF NOT EXISTS trg_content_revision_no_update
+BEFORE UPDATE ON public_content_revisions
+BEGIN
+    SELECT RAISE(ABORT, 'REVISION_APPEND_ONLY');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_content_revision_no_delete
+BEFORE DELETE ON public_content_revisions
+BEGIN
+    SELECT RAISE(ABORT, 'REVISION_APPEND_ONLY');
+END;
+
+-- Giới hạn tần suất gửi & tra cứu (PUB-02, PUB-04).
+CREATE TABLE IF NOT EXISTS rate_limit_events (
+    id          INTEGER PRIMARY KEY,
+    bucket      TEXT NOT NULL,
+    subject_key TEXT NOT NULL,
+    occurred_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_rate_limit_bucket_subject_time
+    ON rate_limit_events(bucket, subject_key, occurred_at);
+
+-- Index tra cứu lịch sử Audit (ADM-04).
+CREATE INDEX IF NOT EXISTS ix_audit_occurred ON audit_log(occurred_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS ix_audit_object ON audit_log(object_type, object_code, id DESC);
+CREATE INDEX IF NOT EXISTS ix_audit_actor ON audit_log(actor, occurred_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS ix_audit_action ON audit_log(action, occurred_at DESC);

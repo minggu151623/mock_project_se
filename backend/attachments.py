@@ -1,8 +1,10 @@
-"""Tệp bằng chứng tối thiểu (NFR-07). BE3 sở hữu dịch vụ tệp và có thể thay module này.
+"""Dịch vụ quản lý tệp bằng chứng dùng chung (NFR-07, ADM-01→04 - BE3).
 
-- Chỉ nhận PDF/JPG/PNG, tối đa 5 MB. Loại tệp xác định bằng nội dung, không tin đuôi tệp.
-- Lưu bằng tên ngẫu nhiên, không dùng tên người dùng gửi; không bao giờ thực thi.
-- Tệp tải lên trước, sau đó gắn vào hồ sơ (giao hàng, bàn giao xe...). Đã gắn thì không gắn lại.
+- Chỉ nhận PDF/JPG/PNG, tối đa 5 MB. Loại tệp xác định bằng magic bytes nội dung, không tin đuôi tệp.
+- Từ chối tệp có đuôi kép nguy hiểm (ví dụ `.exe.png`, `.html.pdf`) hoặc nhúng thẻ `<script>`.
+- Lưu bằng tên ngẫu nhiên UUID, không dùng tên người dùng gửi trên hệ thống tệp; không bao giờ thực thi.
+- Tệp tải lên trước, sau đó gắn vào hồ sơ (phản hồi báo giá, phụ phí, giao hàng, bàn giao/nhận lại xe...).
+  Đã gắn thì không gắn lại cho hồ sơ khác (trigger `trg_attachment_link_once`).
 """
 
 import hashlib
@@ -24,7 +26,9 @@ _SIGNATURES = (
     (b"\xff\xd8\xff", "image/jpeg", ".jpg"),
 )
 _ALLOWED_EXT = {".pdf", ".png", ".jpg", ".jpeg"}
+_DANGEROUS_INNER_EXT = {".exe", ".bat", ".cmd", ".sh", ".php", ".js", ".jsp", ".html", ".htm", ".svg", ".py"}
 _UNSAFE_NAME = re.compile(r"[^\w.\- ()]+", re.UNICODE)
+_SCRIPT_MARKERS = (b"<script", b"javascript:", b"<?php")
 
 
 def _sniff(data: bytes) -> tuple[str, str] | None:
@@ -32,6 +36,22 @@ def _sniff(data: bytes) -> tuple[str, str] | None:
         if data.startswith(magic):
             return content_type, ext
     return None
+
+
+def _has_dangerous_inner_ext(filename: str) -> bool:
+    name = Path(filename or "").name.lower()
+    parts = name.split(".")
+    if len(parts) <= 2:
+        return False
+    for middle in parts[1:-1]:
+        if f".{middle}" in _DANGEROUS_INNER_EXT:
+            return True
+    return False
+
+
+def _has_embedded_script(data: bytes) -> bool:
+    head = data[:65536].lower()
+    return any(marker in head for marker in _SCRIPT_MARKERS)
 
 
 def _safe_name(filename: str) -> str:
@@ -46,10 +66,13 @@ def attachment_to_dict(row: sqlite3.Row) -> dict:
         "original_name": row["original_name"],
         "content_type": row["content_type"],
         "size_bytes": row["size_bytes"],
+        "sha256": row["sha256"],
         "owner_type": row["owner_type"],
         "owner_code": row["owner_code"],
         "uploaded_at": row["uploaded_at"],
         "uploaded_by": row["uploaded_by"],
+        "linked_at": row["linked_at"],
+        "linked_by": row["linked_by"],
     }
 
 
@@ -63,9 +86,17 @@ def store(
         raise ValidationFailed("Tệp vượt quá 5 MB.", details={"field": "file"})
     sniffed = _sniff(data)
     ext = Path(filename or "").suffix.lower()
-    if sniffed is None or ext not in _ALLOWED_EXT:
-        raise ValidationFailed("Chỉ nhận tệp PDF, JPG hoặc PNG.", details={"field": "file"})
+    if sniffed is None or ext not in _ALLOWED_EXT or _has_dangerous_inner_ext(filename):
+        raise ValidationFailed("Chỉ nhận tệp PDF, JPG hoặc PNG hợp lệ.", details={"field": "file"})
     content_type, stored_ext = sniffed
+    expected_exts = {".jpg", ".jpeg"} if stored_ext == ".jpg" else {stored_ext}
+    if ext not in expected_exts:
+        raise ValidationFailed(
+            "Nội dung tệp không khớp với phần mở rộng (chỉ nhận PDF, JPG hoặc PNG).",
+            details={"field": "file"},
+        )
+    if _has_embedded_script(data):
+        raise ValidationFailed("Tệp chứa nội dung kịch bản không an toàn.", details={"field": "file"})
     stored_name = uuid.uuid4().hex + stored_ext
     folder = Path(files_dir)
     folder.mkdir(parents=True, exist_ok=True)

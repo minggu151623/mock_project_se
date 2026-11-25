@@ -13,8 +13,8 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
-from . import api, api_operations, api_warehouse, api_sales, sales
-from .auth import PrincipalProvider, deny_all_provider, dev_header_provider
+from . import api, api_admin, api_operations, api_public, api_sales, api_warehouse, sales
+from .auth import PrincipalProvider, deny_all_provider, dev_header_provider, session_principal_provider
 from .db import connect, init_db
 from .errors import DomainError
 from .timeutil import system_now
@@ -53,7 +53,7 @@ def create_app(
         principal_provider = (
             dev_header_provider
             if os.environ.get("DEV_AUTH") == "1"
-            else deny_all_provider
+            else session_principal_provider
         )
     app.state.principal_provider = principal_provider
     app.state.clock = clock or system_now
@@ -88,10 +88,14 @@ def create_app(
         # NFR-10: không trả stack trace hay chi tiết nội bộ cho người dùng.
         rid = getattr(request.state, "request_id", "-")
         log.exception("Unhandled error request_id=%s", rid)
-        return _error(500, "INTERNAL_ERROR", f"Lỗi hệ thống. Mã tra cứu: {rid}.")
+        resp = _error(500, "INTERNAL_ERROR", f"Lỗi hệ thống. Mã tra cứu: {rid}.")
+        resp.headers["X-Request-ID"] = rid
+        return resp
 
     app.include_router(api.router, prefix="/api")
     app.include_router(api_operations.router, prefix="/api")
     app.include_router(api_warehouse.router, prefix="/api")
     app.include_router(api_sales.router, prefix="/api")
+    app.include_router(api_admin.router, prefix="/api")
+    app.include_router(api_public.router, prefix="/api")
     return app
