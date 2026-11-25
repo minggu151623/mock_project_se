@@ -1,64 +1,59 @@
 # Bàn giao BE1 ↔ BE3
 
-Tài liệu này ghi lại trạng thái BE1 và các phần cần BE3 tích hợp/kiểm thử. Phạm vi tài khoản thật, phiên đăng nhập, upload tệp dùng chung và kiểm thử chéo thuộc BE3; BE1 không tạo một nguồn dữ liệu người dùng thứ hai.
+Cập nhật trạng thái sau khi BE3 tích hợp xác thực, website công khai, tệp đính kèm và kiểm thử toàn hệ thống (2026-11-25).
 
-## Trạng thái BE1 hiện tại
+## 1. Tài khoản nội bộ và phân công SAL-03 — hoàn thành
 
-- Đã triển khai các nghiệp vụ SAL-01→09 và PAY-01→04 trong `backend/sales.py` và `backend/api_sales.py`.
-- Đã có migration phiên bản và quy ước cập nhật schema trong `backend/db.py` và `backend/migrations/`.
-- Seed mẫu BE1 nằm riêng trong `backend/seed_sales_dev.py`; có thể chạy sau khi DB đã được khởi tạo.
-- Test BE1 nằm trong `tests/test_sales.py`, `tests/test_sales_concurrency.py` và `tests/test_sales_e2e.py`.
-- Suite hiện tại: 115 test passed. Các luồng tích hợp BE1/BE2 đã bao gồm vận tải, thuê xe trả muộn có phụ phí, và kho nối sang vận tải.
-- Nhánh làm việc: `BE1`. Thay đổi chưa commit/push.
+- BE3 sở hữu nguồn tài khoản và vai trò dùng chung; BE1 không tạo bảng người dùng riêng.
+- `backend/auth.py` cung cấp hợp đồng kiểm tra tài khoản đang `ACTIVE` và có vai trò `SAL`.
+- `backend/sales.py` gọi kiểm tra này khi gán người phụ trách. Kiểm thử tương ứng nằm trong `tests/test_be3_auth_admin.py::test_sal03_assignee_must_be_active_and_have_sal_role`.
 
-## Việc cần BE3 tiếp nối
+## 2. Xác thực và phân quyền API — hoàn thành
 
-### 1. Nguồn tài khoản nội bộ và kiểm tra người phụ trách SAL
+- API nội bộ dùng `Principal(username, roles)` lấy từ phiên đăng nhập; cơ chế header chỉ dùng cho môi trường dev.
+- BE1 tiếp tục dùng `require_roles`; BE3 quản lý đăng nhập, khóa tài khoản, thu hồi vai trò và phiên.
+- Việc khóa tài khoản hoặc thu hồi vai trò có hiệu lực ở request tiếp theo theo kiểm thử BE3 và NEG-22.
 
-Repo hiện chưa có tầng tài khoản thật; `backend/auth.py` chỉ có principal giả dùng trong dev. Khi SAL gán người phụ trách ở SAL-03, hiện BE1 chưa thể kiểm tra tài khoản được gán đang `ACTIVE` và có vai trò `SAL`.
+## 3. Audit và tệp bằng chứng — đã tích hợp
 
-BE3 cần cung cấp một hợp đồng dùng chung để BE1 truy vấn trạng thái và role từ nguồn tài khoản chính thức, ví dụ helper/service nhận username và trả về trạng thái cùng danh sách role. Gắn kiểm tra đó vào thao tác gán người phụ trách. Không tạo bảng user riêng trong BE1.
+- BE1 gọi `audit.write_audit(...)`; audit append-only và che dữ liệu nhạy cảm theo kiểm thử BE3.
+- BE1 dùng `attachments.link(...)` cho phản hồi báo giá (`QuoteResponse`) và phụ phí (`Charge`).
+- Phụ phí cần bằng chứng hợp lệ; tệp bằng chứng phản hồi báo giá là tùy chọn. Phân quyền và kiểm tra tệp thuộc BE3.
 
-### 2. Nối xác thực phiên thật vào API
+## 4. Website công khai và yêu cầu dịch vụ — đã nối
 
-BE3 thay `app.state.principal_provider` bằng xác thực phiên thật, trả về `Principal(username, roles)` và giữ tương thích với `require_roles`. Kiểm tra thu hồi role/khóa tài khoản có hiệu lực ngay ở request kế tiếp theo ADM-01/02 và NFR-02.
+- PUB-02/03 tạo yêu cầu website trong `service_requests`, cấp token tra cứu một lần và chỉ lưu hash.
+- PUB-04 tra cứu bằng POST, không đưa token vào URL và chỉ trả các trường công khai được phép theo BR-18.
+- Khi cần cấp lại token sau xác minh thủ công, BE1 cung cấp `POST /api/sales/requests/{code}/rotate-token`; token cũ mất hiệu lực.
+- Các luồng website → BE1 → BE2 → thanh toán được đưa vào E2E-01→03.
 
-BE1 hiện kiểm tra role ở endpoint theo role được gửi qua cơ chế dev. Các kiểm tra đó cần được chạy lại bằng principal thật của BE3, đặc biệt là SAL, FIN, MGR, DSP và WHS.
+## 5. Kiểm thử và nghiệm thu toàn hệ thống — đã báo cáo hoàn thành
 
-### 3. Thống nhất dịch vụ audit và attachment
+Theo `docs/TEST_PLAN_AND_TRACEABILITY.md` và `docs/UAT_AND_NFR04_REPORT.md`:
 
-- `backend/audit.py` do BE3 sở hữu. Khi thay implementation, giữ chữ ký `write_audit(...)` mà BE1 đang gọi; bảo đảm audit append-only và không ghi token plaintext.
-- `backend/attachments.py` do BE3 sở hữu. BE1 dùng `attachments.link(...)` để gắn evidence cho `QuoteResponse` và `Charge`. Kiểm tra luồng phân quyền upload, xem, tải và gắn tệp với các owner type này.
-- Phụ phí BE1 yêu cầu ít nhất một attachment hợp lệ. Phản hồi báo giá lưu nội dung trao đổi; evidence tệp là tùy chọn.
+- SAL-01→09 và PAY-01→04 được ma trận truy vết đánh dấu `PASS`.
+- Báo cáo BE3 ghi nhận 155/155 test, 24/24 NEG, 3/3 E2E; NFR-04 đạt ngưỡng trên 100.000 đơn và 1.000.000 giao dịch kho.
+- Các kết quả trên là trạng thái trong tài liệu nghiệm thu; khi thay đổi code, cần chạy lại toàn suite theo hướng dẫn của repo.
 
-### 4. Nối public website và kiểm tra E2E đầu-cuối
+## 6. Trạng thái còn lại
 
-BE3 triển khai/nối PUB-02/03/04 với `service_requests` của BE1:
+- Không còn hạng mục nghiệp vụ BE1 nào được đánh dấu thiếu trong ma trận truy vết hiện tại.
+- FE1 còn giao diện kinh doanh SAL; FE2 còn giao diện thanh toán và dashboard/báo cáo. Đây là việc giai đoạn frontend, không phải phần backend BE1.
+- BE1 hỗ trợ FE1/FE2 xử lý lỗi API phát hiện khi tích hợp và cập nhật tài liệu nếu hợp đồng API thay đổi.
 
-- Tạo request với `source="WEBSITE"`, validation dữ liệu theo dịch vụ và chống gửi trùng/giới hạn gửi theo SRS.
-- Sinh token tra cứu đủ độ dài, chỉ trả một lần và lưu hash trong `service_requests.public_token_hash`.
-- Tra cứu bằng POST; không đưa token vào URL/log. Chỉ trả các trường được phép theo BR-18, không trả internal notes, event nội bộ, `public_token_hash` hoặc công nợ.
-- Khi cần cấp lại token, dùng luồng BE1 `POST /api/sales/requests/{code}/rotate-token` sau khi xác minh thủ công; token cũ bị thay ngay.
+## 7. Hợp đồng tích hợp BE1 ↔ BE2
 
-Các test E2E BE1/BE2 hiện bắt đầu từ bước tiếp nhận nội bộ. Chúng chưa kiểm thử website công khai, phát token ban đầu, tra cứu công khai hoặc các quyền dữ liệu PUB-04. BE3 cần nối các bước đó và chạy lại E2E-01/02/03 đầy đủ theo tài liệu 08.
+- SAL-06 gọi `assignments.create_transport_trip(...)`, `assignments.create_rental_record(...)` hoặc `warehouse.create_warehouse_lot(...)` trong cùng transaction tạo đơn.
+- SAL-09 gọi `assignments.cancel_operational_record(...)` trong cùng transaction hủy đơn để hủy hồ sơ vận hành và giải phóng lịch.
+- `sales.bind_integrations()` gắn các hook BE1 vào `integrations.hooks`:
+  - `pending_charge_count(conn, order_code) -> int` chặn hoàn tất vận hành khi còn phụ phí `PENDING`.
+  - `operation_started(conn, order_code, service_type, at)` cập nhật đơn sang `IN_PROGRESS`.
+  - `operation_completed(conn, order_code, service_type, at)` cập nhật đơn sang `COMPLETED`.
+- Với vận tải lấy hàng từ kho, BE1 chuyển `service_data.pickup_from_warehouse=true` sang hồ sơ chuyến để BE2 liên kết phiếu xuất.
 
-### 5. Kiểm thử chéo, bảo mật và nghiệm thu
+## 8. Tài liệu tham chiếu
 
-- Chạy NEG-01→24 và E2E-01→03 trên toàn hệ thống, bổ sung kiểm tra sai quyền/đổi mã đối tượng và bảo vệ token.
-- Đo NFR-04 trên dữ liệu mục tiêu; truy vấn công nợ BE1 đã được lọc, phân trang và tổng hợp trong SQL nhưng chưa có báo cáo benchmark 100.000 đơn.
-- Rà soát NFR-07/08/09/10/11, UAT và traceability theo tài liệu 08.
-
-## Điểm nối BE1 ↔ BE2 đang dùng
-
-- SAL-06 gọi `assignments.create_transport_trip`, `assignments.create_rental_record` hoặc `warehouse.create_warehouse_lot` trong cùng transaction tạo đơn.
-- SAL-09 gọi `assignments.cancel_operational_record(...)` để hủy hồ sơ và giải phóng lịch.
-- `sales.bind_integrations()` gán `pending_charge_count`, `operation_started` và `operation_completed` vào `integrations.hooks` khi khởi động app.
-- Đơn vận tải lấy hàng từ kho cần `service_data.pickup_from_warehouse=true`; BE1 chuyển cờ này sang hồ sơ chuyến để WHS liên kết phiếu xuất.
-
-## Tài liệu đối chiếu
-
-- `SRS/00_Overall_SRS.pdf`
-- `SRS/02_Sales_and_Service_Orders.pdf`
-- `SRS/06_Payment_Tracking.pdf`
-- `SRS/08_Acceptance_and_Traceability.pdf`
-- `AGENTS.md`, `PHAN_CONG.md`, `backend/migrations/README.md`
+- `docs/TEST_PLAN_AND_TRACEABILITY.md`
+- `docs/UAT_AND_NFR04_REPORT.md`
+- `AGENTS.md`
+- `backend/migrations/README.md`
