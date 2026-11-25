@@ -16,27 +16,17 @@ from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, Tabl
 
 @lru_cache(maxsize=1)
 def _register_font() -> tuple[str, str]:
-    """Use a locally installed Unicode font when available; retain portability."""
-    candidates = (
-        (
-            Path("C:/Windows/Fonts/arial.ttf"),
-            Path("C:/Windows/Fonts/arialbd.ttf"),
-        ),
-        (
-            Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
-            Path("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"),
-        ),
-        (
-            Path("/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf"),
-            Path("/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf"),
-        ),
-    )
-    for regular_path, bold_path in candidates:
-        if regular_path.is_file() and bold_path.is_file():
-            pdfmetrics.registerFont(TTFont("QuoteSans", str(regular_path)))
-            pdfmetrics.registerFont(TTFont("QuoteSans-Bold", str(bold_path)))
-            return "QuoteSans", "QuoteSans-Bold"
-    return "Helvetica", "Helvetica-Bold"
+    """Register the bundled Unicode font so PDFs render Vietnamese on every OS."""
+    font_dir = Path(__file__).resolve().parent / "fonts"
+    regular_path = font_dir / "DejaVuSans.ttf"
+    bold_path = font_dir / "DejaVuSans-Bold.ttf"
+    if not regular_path.is_file() or not bold_path.is_file():
+        raise RuntimeError(
+            "Thiếu font DejaVu Sans đi kèm; không thể tạo PDF báo giá tiếng Việt."
+        )
+    pdfmetrics.registerFont(TTFont("QuoteSans", str(regular_path)))
+    pdfmetrics.registerFont(TTFont("QuoteSans-Bold", str(bold_path)))
+    return "QuoteSans", "QuoteSans-Bold"
 
 
 def _paragraph(text: object, style: ParagraphStyle) -> Paragraph:

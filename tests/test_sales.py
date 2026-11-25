@@ -265,48 +265,6 @@ def test_rejected_quote_does_not_need_a_payment_due_date(conn, clock):
     assert response["order"] is None
 
 
-def test_expired_draft_cannot_be_issued(conn, clock):
-    request, _ = issued_quote(conn, clock())
-    with write_tx(conn):
-        draft = sales.create_quote(
-            conn,
-            request_code=request["code"],
-            valid_until="2026-12-02",
-            service_data=request["service_data"],
-            lines=[
-                {
-                    "description": "Phí vận chuyển",
-                    "quantity": 1,
-                    "unit_price_vnd": 5_000,
-                }
-            ],
-            actor="sal1",
-            now=clock(),
-        )
-    clock.advance(days=2)
-    with write_tx(conn), pytest.raises(Conflict) as error:
-        sales.issue_quote(conn, draft["code"], actor="sal1", now=clock())
-    assert error.value.code == "QUOTE_EXPIRED"
-
-
-def test_rejected_quote_does_not_need_a_payment_due_date(conn, clock):
-    _, quote = issued_quote(conn, clock())
-    with write_tx(conn):
-        response = sales.respond_quote_and_create_order(
-            conn,
-            quote["code"],
-            accepted=False,
-            channel="EMAIL",
-            content="Khách từ chối do thay đổi kế hoạch.",
-            evidence=[],
-            payment_due_date=None,
-            actor="sal1",
-            now=clock(),
-        )
-    assert response["quote"]["status"] == "REJECTED"
-    assert response["order"] is None
-
-
 def test_request_contact_and_token_rotation_are_audited_and_append_only(conn, clock):
     active_customer = customer(conn, clock())
     with write_tx(conn):
@@ -396,6 +354,7 @@ def test_order_payment_reversal_charge_and_receivable_consistency(client, conn, 
             amount_vnd=50_000,
             reason="Bốc xếp ngoài giờ",
             evidence=[charge_evidence],
+            roles=frozenset({"DSP"}),
             actor="dsp1",
             now=clock(),
         )
