@@ -542,6 +542,7 @@ def charge_create(
     p: Principal = Depends(any_charge),
     c=Depends(get_conn),
 ):
+    sales.ensure_charge_role(c, code, p.roles)
     now = now_of(req)
     return idempotent_write(
         c,
@@ -553,7 +554,7 @@ def charge_create(
         now=now,
         status_code=201,
         action=lambda: sales.propose_charge(
-            c, code, **b.model_dump(), actor=p.username, now=now
+            c, code, **b.model_dump(), roles=p.roles, actor=p.username, now=now
         ),
     )
 

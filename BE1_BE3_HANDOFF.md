@@ -38,6 +38,11 @@ Theo `docs/TEST_PLAN_AND_TRACEABILITY.md` và `docs/UAT_AND_NFR04_REPORT.md`:
 ## 6. Trạng thái còn lại
 
 - Không còn hạng mục nghiệp vụ BE1 nào được đánh dấu thiếu trong ma trận truy vết hiện tại.
+- Review ngày 2026-11-25:
+  - BE1 đã sửa 5 lỗi: phát hành báo giá sau khi yêu cầu đã chốt, quyền đề nghị phụ phí theo loại đơn, font PDF tiếng Việt, chi tiết lỗi trùng tham chiếu thanh toán, tên test trùng.
+  - BE3 đã sửa 6 mục review.
+  - Sau khi gộp nhánh BE1 vào main, toàn bộ suite qua: 161 passed.
+- BE1 còn cần thêm test hồi quy riêng cho ba lỗi: phát hành báo giá sau khi chốt, quyền đề nghị phụ phí, chi tiết lỗi trùng tham chiếu.
 - FE1 còn giao diện kinh doanh SAL; FE2 còn giao diện thanh toán và dashboard/báo cáo. Đây là việc giai đoạn frontend, không phải phần backend BE1.
 - BE1 hỗ trợ FE1/FE2 xử lý lỗi API phát hiện khi tích hợp và cập nhật tài liệu nếu hợp đồng API thay đổi.
 

@@ -9,7 +9,7 @@ from datetime import date, datetime, time
 from . import assignments, attachments, auth, warehouse
 from .audit import write_audit
 from .db import next_code, require_tx
-from .errors import Conflict, NotFound, ValidationFailed
+from .errors import Conflict, Forbidden, NotFound, ValidationFailed
 from .integrations import hooks
 from .timeutil import SYSTEM_TZ, to_db, to_utc
 from .validation import check_version, clean_text
@@ -932,6 +932,19 @@ def issue_quote(conn, code, *, actor, now):
     if date.fromisoformat(q["valid_until"]) < now.astimezone(SYSTEM_TZ).date():
         raise Conflict("Báo giá nháp đã quá hạn.", code="QUOTE_EXPIRED")
     req = get_request(conn, q["request_code"])
+    existing_order = conn.execute(
+        "SELECT code FROM service_orders WHERE request_code=? LIMIT 1",
+        (q["request_code"],),
+    ).fetchone()
+    if req["status"] in ("CONFIRMED", "CLOSED_LOST") or existing_order:
+        raise Conflict(
+            "Không thể phát hành báo giá sau khi yêu cầu đã được chốt hoặc đóng.",
+            code="INVALID_STATE",
+            details={
+                "request_status": req["status"],
+                "existing_order_code": existing_order["code"] if existing_order else None,
+            },
+        )
     if not req["customer_code"]:
         raise Conflict("Yêu cầu chưa gắn khách hàng.", code="REQUEST_NOT_READY")
     if customer(conn, req["customer_code"])["status"] != "ACTIVE":
@@ -1214,9 +1227,29 @@ def order_detail(conn, code, *, now):
     return order
 
 
-def propose_charge(conn, order_code, *, amount_vnd, reason, evidence, actor, now):
-    require_tx(conn)
+def ensure_charge_role(conn, order_code, roles):
     o = _row(conn, "service_orders", order_code)
+    service_role = {
+        "TRANSPORT": "DSP",
+        "RENTAL": "DSP",
+        "WAREHOUSE": "WHS",
+    }[o["service_type"]]
+    if "SAL" not in roles and service_role not in roles:
+        raise Forbidden(
+            "Vai trò của bạn không được đề nghị phụ phí cho loại đơn này.",
+            details={
+                "service_type": o["service_type"],
+                "required_role": service_role,
+            },
+        )
+    return o
+
+
+def propose_charge(
+    conn, order_code, *, amount_vnd, reason, evidence, roles, actor, now
+):
+    require_tx(conn)
+    o = ensure_charge_role(conn, order_code, roles)
     if o["status"] in ("COMPLETED", "CANCELLED"):
         raise Conflict(
             "Không thể đề nghị phụ phí sau khi đơn kết thúc.", code="INVALID_STATE"
@@ -1302,16 +1335,17 @@ def record_payment(
         raise ValidationFailed(
             "Chuyển khoản cần tham chiếu chứng từ.", details={"field": "reference"}
         )
-    if (
-        reference
-        and conn.execute(
-            "SELECT 1 FROM payments WHERE order_code=? AND reference=? AND reversal_of IS NULL",
+    existing_payment = None
+    if reference:
+        existing_payment = conn.execute(
+            "SELECT code FROM payments WHERE order_code=? AND reference=? AND reversal_of IS NULL",
             (order_code, reference),
         ).fetchone()
-    ):
+    if existing_payment:
         raise Conflict(
             "Tham chiếu chuyển khoản này đã được ghi nhận trên đơn.",
             code="PAYMENT_REFERENCE_EXISTS",
+            details={"existing_payment_code": existing_payment["code"]},
         )
     b = order_balance(conn, order_code)
     if amount_vnd > b["balance_vnd"]:

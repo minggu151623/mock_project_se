@@ -383,6 +383,7 @@ def test_rental_late_return_charge_completion_and_payment(client, conn, clock):
             amount_vnd=300_000,
             reason="Trả xe muộn theo biên bản.",
             evidence=[charge_evidence],
+            roles=frozenset({"DSP"}),
             actor="dsp1",
             now=clock(),
         )
