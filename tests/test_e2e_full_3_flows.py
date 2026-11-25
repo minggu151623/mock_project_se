@@ -64,7 +64,7 @@ def test_e2e_01_transport_from_public_website_to_delivery_and_two_payments(clien
     }
     pub_sub = client.post(
         "/api/public/requests",
-        headers={"Idempotency-Key": "e2e01-pub-submit", "X-Forwarded-For": "203.0.113.1"},
+        headers={"Idempotency-Key": "e2e01-pub-submit"},
         json={
             "service_type": "TRANSPORT",
             "contact": {
@@ -74,6 +74,7 @@ def test_e2e_01_transport_from_public_website_to_delivery_and_two_payments(clien
                 "email": "an@e2e-transport.test",
             },
             "service_data": service_data,
+            "data_use_acknowledged": True,
         },
     )
     assert pub_sub.status_code == 201, pub_sub.text
@@ -236,12 +237,18 @@ def test_e2e_01_transport_from_public_website_to_delivery_and_two_payments(clien
     assert p2.json()["balance"]["payment_status"] == "PAID"
     assert p2.json()["balance"]["balance_vnd"] == 0
 
-    # 6. Khách tra cứu lại công khai: thấy đủ 4 mốc, trạng thái COMPLETED, không lộ công nợ.
+    # 6. Khách tra cứu lại công khai bằng cả mã yêu cầu lẫn mã đơn: thấy đủ 4 mốc, trạng thái COMPLETED, không lộ công nợ.
     lookup_final = client.post(
         "/api/public/lookup",
         json={"request_code": req_code, "token": lookup_token},
     )
     assert lookup_final.status_code == 200
+    lookup_by_order = client.post(
+        "/api/public/lookup",
+        json={"request_code": order_code, "token": lookup_token},
+    )
+    assert lookup_by_order.status_code == 200
+    assert lookup_by_order.json() == lookup_final.json()
     pub_body = lookup_final.json()
     assert pub_body["order_code"] == order_code
     assert pub_body["order_status"] == "COMPLETED"
@@ -268,7 +275,6 @@ def test_e2e_02_rental_late_return_surcharge_approval_and_settlement(client, con
     }
     pub_sub = client.post(
         "/api/public/requests",
-        headers={"X-Forwarded-For": "203.0.113.2"},
         json={
             "service_type": "RENTAL",
             "contact": {
@@ -278,6 +284,7 @@ def test_e2e_02_rental_late_return_surcharge_approval_and_settlement(client, con
                 "email": "hanh@e2e-rental.test",
             },
             "service_data": service_data,
+            "data_use_acknowledged": True,
         },
     ).json()
     req_code, lookup_token = pub_sub["request_code"], pub_sub["lookup_token"]
@@ -427,7 +434,6 @@ def test_e2e_03_warehouse_partial_issues_linked_to_transport_and_separate_receiv
     }
     wh_pub = client.post(
         "/api/public/requests",
-        headers={"X-Forwarded-For": "203.0.113.3"},
         json={
             "service_type": "WAREHOUSE",
             "contact": {
@@ -437,6 +443,7 @@ def test_e2e_03_warehouse_partial_issues_linked_to_transport_and_separate_receiv
                 "email": "nam@e2e-warehouse.test",
             },
             "service_data": wh_data,
+            "data_use_acknowledged": True,
         },
     ).json()
     wh_req_code, wh_token = wh_pub["request_code"], wh_pub["lookup_token"]
@@ -512,7 +519,6 @@ def test_e2e_03_warehouse_partial_issues_linked_to_transport_and_separate_receiv
     }
     tr_pub = client.post(
         "/api/public/requests",
-        headers={"X-Forwarded-For": "203.0.113.3"},
         json={
             "service_type": "TRANSPORT",
             "contact": {
@@ -522,6 +528,7 @@ def test_e2e_03_warehouse_partial_issues_linked_to_transport_and_separate_receiv
                 "email": "nam@e2e-warehouse.test",
             },
             "service_data": tr_data,
+            "data_use_acknowledged": True,
         },
     ).json()
     tr_req_code, tr_token = tr_pub["request_code"], tr_pub["lookup_token"]

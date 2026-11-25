@@ -1,5 +1,6 @@
 """HTTP API cho website công khai, gửi yêu cầu dịch vụ, tra cứu tiến độ và quản lý nội dung CMS (PUB-01→05 - BE3)."""
 
+import os
 from typing import Literal
 
 from fastapi import APIRouter, Depends, Header, Request, Response
@@ -9,19 +10,34 @@ from . import public_site
 from .api_common import Body, Limit, NameText, NoteText, Offset, get_conn, idempotent_write, now_of, role_dependency
 from .auth import CMS_WRITE_ROLES, Principal
 from .db import write_tx
-from .errors import DomainError
+from .errors import DomainError, ValidationFailed
 
 router = APIRouter()
 cms_editor = role_dependency(CMS_WRITE_ROLES)
 
 
 def _client_ip(request: Request) -> str:
+    """Lấy IP của client. Mặc định dùng `request.client.host` để chống giả mạo `X-Forwarded-For`.
+
+    Chỉ đọc `X-Forwarded-For` khi request đi qua reverse proxy tin cậy được khai báo trong
+    biến môi trường `TRUSTED_PROXIES` (danh sách IP phân tách bằng dấu phẩy). Khi đó lấy IP
+    ở bên phải nhất trong chuỗi `X-Forwarded-For` không nằm trong `TRUSTED_PROXIES`.
+    """
+    direct_ip = (request.client.host if (request.client and request.client.host) else "127.0.0.1").strip() or "127.0.0.1"
+    trusted_raw = (os.environ.get("TRUSTED_PROXIES") or "").strip()
+    if not trusted_raw:
+        return direct_ip
+    trusted = {ip.strip() for ip in trusted_raw.split(",") if ip.strip()}
+    if "*" not in trusted and direct_ip not in trusted:
+        return direct_ip
     forwarded = (request.headers.get("X-Forwarded-For") or "").strip()
-    if forwarded:
-        return forwarded.split(",")[0].strip() or "127.0.0.1"
-    if request.client and request.client.host:
-        return request.client.host
-    return "127.0.0.1"
+    if not forwarded:
+        return direct_ip
+    chain = [ip.strip() for ip in forwarded.split(",") if ip.strip()]
+    for ip in reversed(chain):
+        if "*" not in trusted and ip not in trusted:
+            return ip
+    return chain[0] if chain else direct_ip
 
 
 def _forbid_token_in_url(request: Request) -> None:
@@ -66,6 +82,7 @@ class PublicRequestIn(Body):
     service_type: Literal["TRANSPORT", "RENTAL", "WAREHOUSE"]
     contact: dict
     service_data: dict
+    data_use_acknowledged: bool | None = None
 
 
 @router.post("/public/requests", status_code=201)
@@ -80,7 +97,31 @@ def submit_public_request(
     client_ip = _client_ip(request)
     now = now_of(request)
     anon_principal = Principal(username=f"public:{client_ip}", roles=frozenset())
-    return idempotent_write(
+    first_call_token: dict[str, str] = {}
+
+    def _create_and_redact() -> dict:
+        created = public_site.submit_public_request(
+            conn,
+            client_ip=client_ip,
+            service_type=body.service_type,
+            contact=body.contact,
+            service_data=body.service_data,
+            data_use_acknowledged=body.data_use_acknowledged,
+            now=now,
+        )
+        first_call_token["token"] = created["token"]
+        # NFR-03: Không lưu token tra cứu dạng chữ rõ vào bảng idempotency_keys.
+        return {
+            **created,
+            "token": None,
+            "lookup_token": None,
+            "notice": (
+                "Token tra cứu chỉ hiển thị một lần ở lần gửi đầu tiên. "
+                "Vui lòng liên hệ nhân viên kinh doanh để cấp lại nếu mất."
+            ),
+        }
+
+    result = idempotent_write(
         conn,
         response,
         key=idempotency_key,
@@ -89,21 +130,24 @@ def submit_public_request(
         body=body,
         now=now,
         status_code=201,
-        action=lambda: public_site.submit_public_request(
-            conn,
-            client_ip=client_ip,
-            service_type=body.service_type,
-            contact=body.contact,
-            service_data=body.service_data,
-            now=now,
-        ),
+        action=_create_and_redact,
     )
+    if "token" in first_call_token:
+        return {
+            **result,
+            "token": first_call_token["token"],
+            "lookup_token": first_call_token["token"],
+            "notice": "Lưu lại mã yêu cầu và token tra cứu. Token chỉ hiển thị một lần duy nhất.",
+        }
+    return result
 
 
 # ---------- PUB-04: Tra cứu tiến độ công khai (chỉ POST, không nhận token trên URL) ----------
 
 class PublicLookupIn(Body):
-    request_code: str = Field(min_length=1, max_length=50)
+    request_code: str | None = Field(None, min_length=1, max_length=50)
+    order_code: str | None = Field(None, min_length=1, max_length=50)
+    code: str | None = Field(None, min_length=1, max_length=50)
     token: str = Field(min_length=1, max_length=200)
 
 
@@ -114,10 +158,13 @@ def lookup_public_progress(
     conn=Depends(get_conn),
 ):
     _forbid_token_in_url(request)
+    lookup_code = body.request_code or body.order_code or body.code
+    if not lookup_code:
+        raise ValidationFailed("Cần nhập mã yêu cầu hoặc mã đơn để tra cứu.", details={"field": "request_code"})
     return public_site.lookup_public_progress(
         conn,
         client_ip=_client_ip(request),
-        request_code=body.request_code,
+        request_code=lookup_code,
         token=body.token,
         now=now_of(request),
     )

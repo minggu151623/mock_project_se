@@ -373,27 +373,37 @@ def run_benchmark() -> dict:
         results["READ: GET /api/warehouse/lots/{code} (1M warehouse tx)"] = _stats_ms(d_lot_read)
 
         # 5. Ghi yêu cầu dịch vụ mới từ website công khai (PUB-02/03).
-        d_pub_submit = []
-        for i in range(SAMPLE_RUNS):
-            t = time.perf_counter()
-            r = client.post(
-                "/api/public/requests",
-                headers={"X-Forwarded-For": f"10.20.{i // 4}.{i % 250 + 1}"},
-                json={
-                    "service_type": "TRANSPORT",
-                    "contact": {"name": "KH Bench", "contact_name": "Bench", "phone": "0901234567"},
-                    "service_data": {
-                        "pickup_address": "Kho A",
-                        "delivery_address": "Kho B",
-                        "cargo_description": "Hàng",
-                        "cargo_weight_kg": 500,
-                        "planned_pickup_at": "2026-12-05T08:00:00+07:00",
+        import os
+        old_trusted = os.environ.get("TRUSTED_PROXIES")
+        os.environ["TRUSTED_PROXIES"] = "*"
+        try:
+            d_pub_submit = []
+            for i in range(SAMPLE_RUNS):
+                t = time.perf_counter()
+                r = client.post(
+                    "/api/public/requests",
+                    headers={"X-Forwarded-For": f"10.20.{i // 4}.{i % 250 + 1}"},
+                    json={
+                        "service_type": "TRANSPORT",
+                        "contact": {"name": "KH Bench", "contact_name": "Bench", "phone": "0901234567"},
+                        "service_data": {
+                            "pickup_address": "Kho A",
+                            "delivery_address": "Kho B",
+                            "cargo_description": "Hàng",
+                            "cargo_weight_kg": 500,
+                            "planned_pickup_at": "2026-12-05T08:00:00+07:00",
+                        },
+                        "data_use_acknowledged": True,
                     },
-                },
-            )
-            assert r.status_code == 201
-            d_pub_submit.append(time.perf_counter() - t)
-        results["WRITE: POST /api/public/requests (new website request)"] = _stats_ms(d_pub_submit)
+                )
+                assert r.status_code == 201, r.text
+                d_pub_submit.append(time.perf_counter() - t)
+            results["WRITE: POST /api/public/requests (new website request)"] = _stats_ms(d_pub_submit)
+        finally:
+            if old_trusted is None:
+                os.environ.pop("TRUSTED_PROXIES", None)
+            else:
+                os.environ["TRUSTED_PROXIES"] = old_trusted
 
         now_iso = system_now().isoformat()
 

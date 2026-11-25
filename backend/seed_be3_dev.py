@@ -296,6 +296,7 @@ def seed(db_path: str = "data/dev.sqlite3") -> dict:
                         "email": cust["email"],
                     },
                     service_data=sdata,
+                    data_use_acknowledged=True,
                     now=now,
                 )
                 req_row = sales.update_request(

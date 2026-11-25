@@ -43,6 +43,24 @@ def _race(db_path, *actions):
 
 # ==================== NEG-01 ====================
 def test_neg_01_public_request_missing_or_invalid_service_fields(client):
+    # Thiếu xác nhận đã đọc thông tin sử dụng dữ liệu liên hệ -> 422 data_use_acknowledged.
+    r0 = client.post(
+        "/api/public/requests",
+        json={
+            "service_type": "TRANSPORT",
+            "contact": {"name": "KH A", "contact_name": "A", "phone": "0901234567"},
+            "service_data": {
+                "pickup_address": "Kho A",
+                "delivery_address": "Kho B",
+                "cargo_description": "Hàng",
+                "cargo_weight_kg": 500,
+                "planned_pickup_at": f.iso(8),
+            },
+        },
+    )
+    assert r0.status_code == 422
+    assert r0.json()["error"]["details"]["field"] == "data_use_acknowledged"
+
     # Thiếu trường bắt buộc của TRANSPORT (delivery_address).
     r1 = client.post(
         "/api/public/requests",
@@ -50,6 +68,7 @@ def test_neg_01_public_request_missing_or_invalid_service_fields(client):
             "service_type": "TRANSPORT",
             "contact": {"name": "KH A", "contact_name": "A", "phone": "0901234567"},
             "service_data": {"pickup_address": "Kho A"},
+            "data_use_acknowledged": True,
         },
     )
     assert r1.status_code == 422
@@ -68,6 +87,7 @@ def test_neg_01_public_request_missing_or_invalid_service_fields(client):
                 "requested_end": f.iso(10),
                 "purpose": "Chở hàng",
             },
+            "data_use_acknowledged": True,
         },
     )
     assert r2.status_code == 422
@@ -85,6 +105,7 @@ def test_neg_01_public_request_missing_or_invalid_service_fields(client):
                 "expected_out_at": f.iso(18),
                 "lines": [],
             },
+            "data_use_acknowledged": True,
         },
     )
     assert r3.status_code == 422
@@ -95,7 +116,6 @@ def test_neg_01_public_request_missing_or_invalid_service_fields(client):
 def test_neg_02_public_lookup_wrong_or_rotated_token_and_rate_limit(client):
     sub = client.post(
         "/api/public/requests",
-        headers={"X-Forwarded-For": "192.0.2.10"},
         json={
             "service_type": "TRANSPORT",
             "contact": {"name": "KH A", "contact_name": "A", "phone": "0901234567"},
@@ -106,6 +126,7 @@ def test_neg_02_public_lookup_wrong_or_rotated_token_and_rate_limit(client):
                 "cargo_weight_kg": 500,
                 "planned_pickup_at": f.iso(8),
             },
+            "data_use_acknowledged": True,
         },
     ).json()
     req_code, old_token = sub["request_code"], sub["lookup_token"]

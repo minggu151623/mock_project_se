@@ -35,7 +35,7 @@ ATTACHMENT_READ_ROLES = frozenset({"DSP", "WHS", "SAL", "MGR", "FIN"})
 # Quản trị hệ thống, audit và CMS (ADM-01→04, PUB-05).
 ADMIN_ROLES = frozenset({"ADM"})
 AUDIT_READ_ROLES = frozenset({"ADM", "MGR"})
-CMS_WRITE_ROLES = frozenset({"ADM", "MGR", "SAL"})
+CMS_WRITE_ROLES = frozenset({"ADM"})
 
 SESSION_IDLE_TIMEOUT = timedelta(minutes=30)
 _PASSWORD_CHANGE_ALLOWED_PATHS = frozenset({

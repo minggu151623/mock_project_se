@@ -83,11 +83,11 @@ def test_login_session_idle_timeout_and_logout(client, conn, clock):
 def test_five_failed_logins_lock_account_for_15_minutes(client, conn, clock):
     _seed_admin_and_staff(conn, clock())
 
-    for attempt in range(1, 5):
+    for _ in range(1, 5):
         r = client.post("/api/auth/login", json={"username": "sal1", "password": "WrongPassword!"})
         assert r.status_code == 401
         assert r.json()["error"]["code"] == "INVALID_CREDENTIALS"
-        assert r.json()["error"]["details"]["remaining_attempts"] == 5 - attempt
+        assert r.json()["error"]["details"] == {}
 
     fifth = client.post("/api/auth/login", json={"username": "sal1", "password": "WrongPassword!"})
     assert fifth.status_code == 403

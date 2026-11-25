@@ -30,6 +30,7 @@ def _transport_payload():
             "planned_pickup_at": f.iso(8),
             "committed_end": f.iso(12),
         },
+        "data_use_acknowledged": True,
     }
 
 
@@ -121,7 +122,7 @@ def test_cms_lifecycle_html_sanitization_and_protect_all_three_services(client, 
         conn.execute("DELETE FROM public_content_revisions")
 
 
-def test_public_request_submission_token_hash_xss_and_rate_limit(client, conn, clock):
+def test_public_request_submission_token_hash_xss_and_rate_limit(client, conn, clock, monkeypatch):
     # Chặn XSS/script trong form khách gửi.
     bad_xss = _transport_payload()
     bad_xss["contact"]["name"] = "<script>alert(1)</script>Công ty X"
@@ -129,16 +130,16 @@ def test_public_request_submission_token_hash_xss_and_rate_limit(client, conn, c
     assert r_xss.status_code == 422
     assert r_xss.json()["error"]["details"]["field"] == "name"
 
-    # Gửi yêu cầu hợp lệ kèm Idempotency-Key: bấm lại trả cùng mã và token, không tạo 2 yêu cầu.
+    # Gửi yêu cầu hợp lệ kèm Idempotency-Key: bấm lại trả cùng mã yêu cầu nhưng không lưu/trả lại token chữ rõ.
     payload = _transport_payload()
-    headers = {"Idempotency-Key": "pub-req-idem-001", "X-Forwarded-For": "203.0.113.10"}
+    headers = {"Idempotency-Key": "pub-req-idem-001"}
     first = client.post("/api/public/requests", headers=headers, json=payload)
     second = client.post("/api/public/requests", headers=headers, json=payload)
     assert first.status_code == 201, first.text
     assert second.status_code == 201
     data = first.json()
     assert data["request_code"] == second.json()["request_code"]
-    assert data["lookup_token"] == second.json()["lookup_token"]
+    assert second.json()["token"] is None and second.json()["lookup_token"] is None
 
     # Token >= 128 bit (32 ký tự URL-safe = 192 bit) và DB chỉ lưu SHA-256 hash.
     token = data["lookup_token"]
@@ -154,36 +155,31 @@ def test_public_request_submission_token_hash_xss_and_rate_limit(client, conn, c
 
     # Giới hạn 5 lần gửi / IP / 10 phút (đã gửi 1 lần ở trên, gửi thêm 4 lần nữa là đủ 5).
     for i in range(2, 6):
-        r = client.post(
-            "/api/public/requests",
-            headers={"X-Forwarded-For": "203.0.113.10"},
-            json=payload,
-        )
+        r = client.post("/api/public/requests", json=payload)
         assert r.status_code == 201, f"Lần {i} phải thành công: {r.text}"
 
+    # Kể cả khi kẻ tấn công giả mạo X-Forwarded-For, lần thứ 6 vẫn bị chặn 429.
     sixth = client.post(
         "/api/public/requests",
-        headers={"X-Forwarded-For": "203.0.113.10"},
+        headers={"X-Forwarded-For": "203.0.113.99"},
         json=payload,
     )
     assert sixth.status_code == 429
     assert sixth.json()["error"]["code"] == "RATE_LIMITED"
 
-    # IP khác không bị ảnh hưởng.
+    # Khi đi qua reverse proxy tin cậy (TRUSTED_PROXIES), IP khác gửi được bình thường.
+    monkeypatch.setenv("TRUSTED_PROXIES", "testclient,127.0.0.1")
     other_ip = client.post(
         "/api/public/requests",
         headers={"X-Forwarded-For": "203.0.113.99"},
         json=payload,
     )
     assert other_ip.status_code == 201
+    monkeypatch.delenv("TRUSTED_PROXIES", raising=False)
 
     # Sau 11 phút, IP cũ gửi lại được.
     clock.advance(minutes=11)
-    after_window = client.post(
-        "/api/public/requests",
-        headers={"X-Forwarded-For": "203.0.113.10"},
-        json=payload,
-    )
+    after_window = client.post("/api/public/requests", json=payload)
     assert after_window.status_code == 201
 
 
@@ -285,13 +281,18 @@ def test_public_lookup_post_only_br18_privacy_and_10_failed_attempts_rate_limit(
             now=clock(),
         )
 
-    # Tra cứu công khai đúng token: trả đúng trường BR-18, không lộ bất kỳ dữ liệu nội bộ hay tiền bạc nào.
+    # Tra cứu công khai bằng cả mã yêu cầu (REQ-...) lẫn mã đơn (ORD-...) với cùng token.
     lookup = client.post(
         "/api/public/lookup",
-        headers={"X-Forwarded-For": "198.51.100.20"},
         json={"request_code": req_code, "token": token},
     )
     assert lookup.status_code == 200, lookup.text
+    lookup_by_order = client.post(
+        "/api/public/lookup",
+        json={"request_code": order["code"], "token": token},
+    )
+    assert lookup_by_order.status_code == 200, lookup_by_order.text
+    assert lookup_by_order.json() == lookup.json()
     body = lookup.json()
     assert body["request_code"] == req_code
     assert body["order_code"] == order["code"]

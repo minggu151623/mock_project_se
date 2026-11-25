@@ -584,10 +584,12 @@ def submit_public_request(
     service_type: str,
     contact: dict,
     service_data: dict,
+    data_use_acknowledged: bool | None = None,
     now: datetime,
 ) -> dict:
     """PUB-02 & PUB-03: Nhận yêu cầu dịch vụ từ website công khai.
 
+    - Bắt buộc xác nhận đã đọc thông tin sử dụng dữ liệu liên hệ (`data_use_acknowledged=True`).
     - Giới hạn tối đa 5 lần gửi / IP / 10 phút.
     - Chống XSS / script injection trên toàn bộ trường contact và service_data.
     - Sinh token tra cứu >= 128 bit (192-bit `secrets.token_urlsafe(24)`), lưu SHA-256 trong
@@ -603,9 +605,28 @@ def submit_public_request(
             details={"limit": SUBMIT_RATE_LIMIT, "window_minutes": 10},
         )
 
+    acknowledged = data_use_acknowledged
+    if acknowledged is None and isinstance(contact, dict):
+        acknowledged = contact.get("data_use_acknowledged")
+    if acknowledged is not True:
+        raise ValidationFailed(
+            "Cần xác nhận đã đọc thông tin sử dụng dữ liệu liên hệ trước khi gửi yêu cầu.",
+            details={"field": "data_use_acknowledged"},
+        )
+
     assert_no_script_payload(contact, "contact")
     assert_no_script_payload(service_data, "service_data")
     _check_catalog_active_if_configured(conn, service_type, service_data)
+
+    enriched_contact = (
+        {
+            **contact,
+            "data_use_acknowledged": True,
+            "data_use_acknowledged_at": to_db(now_u),
+        }
+        if isinstance(contact, dict)
+        else contact
+    )
 
     # Token >= 128 bit (24 bytes = 192 bits).
     token = secrets.token_urlsafe(24)
@@ -613,7 +634,7 @@ def submit_public_request(
         conn,
         service_type=service_type,
         source="WEBSITE",
-        contact=contact,
+        contact=enriched_contact,
         service_data=service_data,
         actor="public",
         now=now_u,
@@ -629,6 +650,8 @@ def submit_public_request(
         "service_type": created["service_type"],
         "source": "WEBSITE",
         "status": created["status"],
+        "data_use_acknowledged": True,
+        "data_use_acknowledged_at": to_db(now_u),
         "created_at": created["created_at"],
         "notice": "Lưu lại mã yêu cầu và token tra cứu. Token chỉ hiển thị một lần duy nhất.",
     }
@@ -686,9 +709,10 @@ def lookup_public_progress(
     token: str,
     now: datetime,
 ) -> dict:
-    """PUB-04: Tra cứu tiến độ công khai bằng mã yêu cầu + token qua POST.
+    """PUB-04: Tra cứu tiến độ công khai bằng mã yêu cầu HOẶC mã đơn + token qua POST.
 
     - Chặn sau 10 lần sai / IP / 15 phút (429 RATE_LIMITED).
+    - Hỗ trợ nhập cả mã yêu cầu (`REQ-...`) lẫn mã đơn dịch vụ (`ORD-...`) với cùng token.
     - So sánh băm SHA-256 của token bằng `hmac.compare_digest`.
     - Chỉ trả các trường BR-18 cho phép; tuyệt đối không lộ ghi chú nội bộ, công nợ,
       nhật ký sự kiện nội bộ hay `public_token_hash`.
@@ -707,11 +731,34 @@ def lookup_public_progress(
     cleaned_token = clean_text(token, "token", max_len=200)
     candidate_hash = hashlib.sha256(cleaned_token.encode("utf-8")).hexdigest()
 
-    row = conn.execute(
-        "SELECT code, service_type, status, public_token_hash, created_at, updated_at "
-        "FROM service_requests WHERE code = ?",
-        (cleaned_code,),
-    ).fetchone()
+    target_req_code = cleaned_code
+    if cleaned_code.startswith("ORD-"):
+        order_ref = conn.execute(
+            "SELECT request_code FROM service_orders WHERE code = ?",
+            (cleaned_code,),
+        ).fetchone()
+        target_req_code = order_ref["request_code"] if order_ref is not None else ""
+
+    row = (
+        conn.execute(
+            "SELECT code, service_type, status, public_token_hash, created_at, updated_at "
+            "FROM service_requests WHERE code = ?",
+            (target_req_code,),
+        ).fetchone()
+        if target_req_code
+        else None
+    )
+    if row is None and not cleaned_code.startswith("ORD-"):
+        order_ref = conn.execute(
+            "SELECT request_code FROM service_orders WHERE code = ?",
+            (cleaned_code,),
+        ).fetchone()
+        if order_ref is not None:
+            row = conn.execute(
+                "SELECT code, service_type, status, public_token_hash, created_at, updated_at "
+                "FROM service_requests WHERE code = ?",
+                (order_ref["request_code"],),
+            ).fetchone()
 
     valid = (
         row is not None

@@ -310,7 +310,6 @@ def login(conn: sqlite3.Connection, *, username: str, password: str, now: dateti
                 error_to_raise = Unauthorized(
                     "Tên đăng nhập hoặc mật khẩu không đúng.",
                     code="INVALID_CREDENTIALS",
-                    details={"remaining_attempts": MAX_FAILED_LOGINS - failed_count},
                 )
         else:
             conn.execute(
