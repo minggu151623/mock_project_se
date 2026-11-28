@@ -13,7 +13,7 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
-from . import api, api_admin, api_operations, api_public, api_sales, api_warehouse, sales
+from . import api, api_admin, api_fe2, api_operations, api_public, api_sales, api_warehouse, sales
 from .auth import PrincipalProvider, deny_all_provider, dev_header_provider, session_principal_provider
 from .db import connect, init_db
 from .errors import DomainError
@@ -98,4 +98,5 @@ def create_app(
     app.include_router(api_sales.router, prefix="/api")
     app.include_router(api_admin.router, prefix="/api")
     app.include_router(api_public.router, prefix="/api")
+    app.include_router(api_fe2.router, prefix="/api")
     return app

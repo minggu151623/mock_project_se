@@ -203,9 +203,12 @@ def update_draft(doc_code: str, body: DraftUpdate, request: Request, p: Principa
 
 
 @router.post("/documents/{doc_code}/post")
-def post_document(doc_code: str, request: Request, p: Principal = Depends(writer), conn=Depends(get_conn)):
-    with write_tx(conn):
-        return warehouse.post_document(conn, doc_code, actor=p.username, now=now_of(request))
+def post_document(doc_code: str, request: Request, response: Response, idempotency_key: IdemKey = None,
+                  p: Principal = Depends(writer), conn=Depends(get_conn)):
+    now = now_of(request)
+    return idempotent_write(conn, response, key=idempotency_key, principal=p,
+                            operation=f"wh.post:{doc_code}", body=Body(), now=now,
+                            action=lambda: warehouse.post_document(conn, doc_code, actor=p.username, now=now))
 
 
 @router.post("/documents/{doc_code}/cancel")
@@ -235,16 +238,20 @@ def approval_queue(limit: Limit = 50, offset: Offset = 0, _: Principal = Depends
 
 
 @router.post("/documents/{doc_code}/approve")
-def approve(doc_code: str, body: Decision, request: Request, p: Principal = Depends(approver),
-            conn=Depends(get_conn)):
-    with write_tx(conn):
-        return warehouse.approve_adjustment(conn, doc_code, decision_note=body.decision_note, actor=p.username,
-                                            now=now_of(request))
+def approve(doc_code: str, body: Decision, request: Request, response: Response, idempotency_key: IdemKey = None,
+            p: Principal = Depends(approver), conn=Depends(get_conn)):
+    now = now_of(request)
+    return idempotent_write(conn, response, key=idempotency_key, principal=p,
+                            operation=f"wh.approve:{doc_code}", body=body, now=now,
+                            action=lambda: warehouse.approve_adjustment(
+                                conn, doc_code, decision_note=body.decision_note, actor=p.username, now=now))
 
 
 @router.post("/documents/{doc_code}/reject")
-def reject(doc_code: str, body: Rejection, request: Request, p: Principal = Depends(approver),
-           conn=Depends(get_conn)):
-    with write_tx(conn):
-        return warehouse.reject_adjustment(conn, doc_code, decision_note=body.decision_note, actor=p.username,
-                                           now=now_of(request))
+def reject(doc_code: str, body: Rejection, request: Request, response: Response, idempotency_key: IdemKey = None,
+           p: Principal = Depends(approver), conn=Depends(get_conn)):
+    now = now_of(request)
+    return idempotent_write(conn, response, key=idempotency_key, principal=p,
+                            operation=f"wh.reject:{doc_code}", body=body, now=now,
+                            action=lambda: warehouse.reject_adjustment(
+                                conn, doc_code, decision_note=body.decision_note, actor=p.username, now=now))

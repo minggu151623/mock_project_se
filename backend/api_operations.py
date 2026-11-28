@@ -199,9 +199,12 @@ def return_vehicle(rental_code: str, body: Return, request: Request, response: R
 
 
 @router.post("/rentals/{rental_code}/complete")
-def complete_rental(rental_code: str, request: Request, p: Principal = Depends(writer), conn=Depends(get_conn)):
-    with write_tx(conn):
-        return rental_ops.complete_rental(conn, rental_code, actor=p.username, now=now_of(request))
+def complete_rental(rental_code: str, request: Request, response: Response, idempotency_key: IdemKey = None,
+                    p: Principal = Depends(writer), conn=Depends(get_conn)):
+    now = now_of(request)
+    return idempotent_write(conn, response, key=idempotency_key, principal=p,
+                            operation=f"rental.complete:{rental_code}", body=Body(), now=now,
+                            action=lambda: rental_ops.complete_rental(conn, rental_code, actor=p.username, now=now))
 
 
 @router.post("/rentals/{rental_code}/notes", status_code=201)
