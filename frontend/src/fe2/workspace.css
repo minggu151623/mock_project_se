@@ -1,0 +1,14 @@
+.fe2-page { font-size: 16px; }
+.fe2-page .page-heading p, .fe2-page .panel-heading p, .fe2-page .empty small { font-size: 14px; line-height: 1.6; }
+.fe2-page .panel-heading h2 { font-size: 18px; }
+.fe2-page .panel { padding: 24px; }
+.fe2-page .fe2-links { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 20px; }
+.fe2-page .btn, .fe2-page .empty b { font-size: 14px; }
+.fe2-section-list { list-style: none; padding: 0; margin: 0; }
+.fe2-section-list li { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 16px 0; border-bottom: 1px solid #edf1ef; }
+.fe2-section-list span { font-size: 14px; color: #64756f; white-space: nowrap; }
+.fe2-page .empty { text-align: center; }
+@media (max-width: 600px) {
+  .fe2-page .panel { padding: 16px; }
+  .fe2-section-list li { flex-direction: column; align-items: flex-start; gap: 8px; }
+}

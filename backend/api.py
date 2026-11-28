@@ -182,6 +182,7 @@ class TripUnassign(Body):
 
 
 class PlannedEndChange(Body):
+    version: int
     new_planned_end: datetime
     reason: ReasonText
 
@@ -226,7 +227,8 @@ def change_trip_planned_end(trip_code: str, body: PlannedEndChange, request: Req
                             p: Principal = Depends(writer), conn=Depends(get_conn)):
     with write_tx(conn):
         return assignments.change_trip_planned_end(conn, trip_code, new_planned_end=body.new_planned_end,
-                                                   reason=body.reason, actor=p.username, now=now_of(request))
+                                                   expected_version=body.version, reason=body.reason,
+                                                   actor=p.username, now=now_of(request))
 
 
 # ---------- Giữ xe cho hồ sơ thuê (RNT-01, RNT-02) ----------

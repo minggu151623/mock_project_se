@@ -70,6 +70,21 @@ def test_late_return_flow_e2e_02(client, conn, clock, ctx):
     assert handover(client, nxt["code"], 18, 45).status_code == 200
 
 
+def test_complete_retry_reuses_result_without_repeating_side_effect(client, conn, clock, ctx):
+    code = ctx["code"]
+    clock.set(f.vn(8, 10))
+    assert handover(client, code).status_code == 200
+    clock.set(f.vn(17, 10))
+    assert give_back(client, code, 17).status_code == 200
+    headers = {**DSP, "Idempotency-Key": "rental-complete-once"}
+    first = client.post(f"/api/rentals/{code}/complete", headers=headers)
+    again = client.post(f"/api/rentals/{code}/complete", headers=headers)
+    assert first.status_code == again.status_code == 200
+    assert first.json() == again.json()
+    assert conn.execute("SELECT count(*) FROM audit_log WHERE action='RENTAL_COMPLETE' AND object_code=?",
+                        (code,)).fetchone()[0] == 1
+
+
 def test_handover_rules(client, clock, ctx):
     clock.set(f.vn(7, 30))
     outside = handover(client, ctx["code"], 7, 30)

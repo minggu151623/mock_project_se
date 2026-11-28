@@ -1,0 +1,6 @@
+.dashboard-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 14px; margin-top: 18px; }
+.dashboard-card { text-align: left; display: grid; gap: 10px; border: 1px solid #bdd4c9; border-radius: 10px; padding: 17px; background: #f5faf7; color: #193b32; cursor: pointer; font: inherit; }
+.dashboard-card:hover, .dashboard-card.selected { border-color: #207b61; background: #e8f5ef; }
+.dashboard-card strong { font-size: 26px; overflow-wrap: anywhere; }
+.dashboard-card small { color: #587469; }
+.dashboard-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }

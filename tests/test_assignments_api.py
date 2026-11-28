@@ -137,10 +137,27 @@ def test_extension_conflict_reported_and_not_applied(client, setup):
     client.post(f"/api/trips/{s['trip']['code']}/assignment", headers=DSP, json=body(s["v1"], s["d1"], 8, 10))
     client.post(f"/api/trips/{s['trip2']['code']}/assignment", headers=DSP, json=body(s["v1"], s["d2"], 10, 12))
     r = client.post(f"/api/trips/{s['trip']['code']}/planned-end", headers=DSP,
-                    json={"new_planned_end": f.iso(11), "reason": "Kẹt xe trên QL1"})
+                    json={"version": trip_of(client, s["trip"]["code"])["version"],
+                          "new_planned_end": f.iso(11), "reason": "Kẹt xe trên QL1"})
     assert r.status_code == 409
     assert r.json()["error"]["details"]["conflicts"][0]["source_code"] == s["trip2"]["code"]
     assert trip_of(client, s["trip"]["code"])["booking"]["planned_end"] == "2026-12-01T03:00:00Z"
+
+
+def test_extension_requires_current_trip_version(client, setup):
+    s = setup
+    code = s["trip"]["code"]
+    client.post(f"/api/trips/{code}/assignment", headers=DSP, json=body(s["v1"], s["d1"], 8, 10))
+    before = trip_of(client, code)
+    path = f"/api/trips/{code}/planned-end"
+    payload = {"version": before["version"], "new_planned_end": f.iso(11), "reason": "Kẹt xe"}
+    assert client.post(path, headers=DSP, json={k: v for k, v in payload.items() if k != "version"}).status_code == 422
+    changed = client.post(path, headers=DSP, json=payload)
+    assert changed.status_code == 200
+    assert changed.json()["version"] == before["version"] + 1
+    stale = client.post(path, headers=DSP2, json=payload)
+    assert stale.status_code == 409
+    assert stale.json()["error"]["code"] == "VERSION_CONFLICT"
 
 
 def test_rental_reserve_change_and_release(client, setup):

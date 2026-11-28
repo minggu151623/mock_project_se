@@ -165,17 +165,19 @@ def unassign_trip(
 
 def change_trip_planned_end(
     conn: sqlite3.Connection, trip_code: str, *, new_planned_end: datetime, reason: str, actor: str,
-    now: datetime,
+    now: datetime, expected_version: int | None = None,
 ) -> dict:
     """Cập nhật giờ kết thúc dự kiến (TRN-05). Chồng lịch sau thì báo, không ghi đè."""
     require_tx(conn)
     row = trip_row(conn, trip_code)
+    if expected_version is not None:
+        check_version(row["version"], expected_version)
     if row["status"] not in ("ASSIGNED", "PICKED_UP", "IN_TRANSIT"):
         raise Conflict("Chuyến không còn lịch giữ để đổi giờ.", code="INVALID_STATE",
                        details={"status": row["status"]})
     booking.change_planned_end(conn, row["booking_id"], new_planned_end, reason=reason,
                                actor=actor, now=now)
-    conn.execute("UPDATE transport_trips SET updated_at = ?, updated_by = ? WHERE code = ?",
+    conn.execute("UPDATE transport_trips SET version = version + 1, updated_at = ?, updated_by = ? WHERE code = ?",
                  (to_db(now), actor, trip_code))
     return get_trip(conn, trip_code, now)
 

@@ -50,6 +50,19 @@ def stock_in(client, lot_code, line, qty):
     assert post_doc(client, receipt(client, lot_code, line, qty)["code"]).status_code == 200
 
 
+def test_post_retry_returns_same_result_without_double_stock(client, conn, lot):
+    code, ln = lot["code"], line_id(lot)
+    doc = receipt(client, code, ln, 7)
+    headers = {**WHS, "Idempotency-Key": "post-document-once"}
+    first = client.post(f"{W}/documents/{doc['code']}/post", headers=headers)
+    again = client.post(f"{W}/documents/{doc['code']}/post", headers=headers)
+    assert first.status_code == again.status_code == 200
+    assert first.json() == again.json()
+    assert on_hand(client, code) == 7
+    assert conn.execute("SELECT count(*) FROM audit_log WHERE action='WAREHOUSE_POST' AND object_code=?",
+                        (doc["code"],)).fetchone()[0] == 1
+
+
 def test_e2e_03_multi_receipt_partial_issue_and_transport_link(client, conn, clock, lot):
     events = []
     integrations.hooks.operation_started = lambda c, o, s, at: events.append(("started", o, s))
